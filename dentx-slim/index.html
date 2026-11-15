@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DentX-Slim interactive simulator</title>
+<style>
+:root{--bg:#f6f9fc;--fg:#0b2545;--mut:#5c6b7a;--card:#fff;--ln:#d5dee8;--ac:#0e8c83;--wr:#d4411c;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b1623;--fg:#e6eef7;--mut:#9fb3c8;--card:#122235;--ln:#27405c;--ac:#3cc8bd;--wr:#ff7a55}}
+:root[data-theme="dark"]{--bg:#0b1623;--fg:#e6eef7;--mut:#9fb3c8;--card:#122235;--ln:#27405c;--ac:#3cc8bd;--wr:#ff7a55}
+html{scroll-padding-top:env(safe-area-inset-top,0px);background:var(--bg)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px;max-width:980px;margin-inline:auto}
+h1{font-size:22px;margin:0 0 4px}p{margin:4px 0;color:var(--mut)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px}
+canvas{width:100%;height:auto;aspect-ratio:260/340;border-radius:8px;background:#000;display:block;image-rendering:pixelated}
+.ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+label{display:block;font-weight:600;font-size:13px}input[type=range]{width:100%;accent-color:var(--ac)}
+.v{color:var(--ac);font-weight:700}.k{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px}
+.k div{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:8px}.k b{display:block;font-size:20px}.k span{font-size:12px;color:var(--mut)}
+.bar{height:14px;border-radius:7px;background:var(--ln);overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:var(--ac)}
+small{color:var(--mut)}@media(max-width:560px){.row{gap:8px}}
+</style></head><body>
+<h1>DentX-Slim: interactive imaging simulator</h1>
+<p>Change the fibre-optic plate (FOP) thickness and dose, and watch the thickness gain trade against image quality. Everything runs in your browser; no X-rays are involved.</p>
+<div class="card ctl" style="margin-top:12px">
+<div><label>FOP thickness: <span class="v" id="vf"></span> mm<input id="fop" type="range" min="1" max="2.5" step="0.1" value="1.5"></label></div>
+<div><label>Dose: <span class="v" id="vd"></span> quanta per pixel<input id="dose" type="range" min="40" max="800" step="10" value="200"></label></div>
+<div><label>Readout clock: <span class="v" id="vm"></span> MHz<input id="mclk" type="range" min="20" max="40" step="1" value="20"></label></div>
+<div><label><input id="cal" type="checkbox" checked> Dark, flat and bad-pixel correction</label><label><input id="des" type="checkbox" checked> Direct-hit despeckle</label></div>
+</div>
+<div class="row">
+<div class="card"><canvas id="c0" width="260" height="340"></canvas><p><b>Conventional</b>: 2.0 mm FOP, same firmware<br>Lesion CNR: <span class="v" id="n0"></span></p></div>
+<div class="card"><canvas id="c1" width="260" height="340"></canvas><p><b>Your DentX-Slim settings</b><br>Lesion CNR: <span class="v" id="n1"></span> (<span id="pc"></span> of conventional)</p></div>
+</div>
+<div class="k">
+<div><b id="th"></b><span>in-mouth thickness (target stack)</span><div class="bar"><i id="tb"></i></div></div>
+<div><b id="vs"></b><span>thinner than 7.1 mm (KaVo ProXam iS)</span></div>
+<div><b id="rd"></b><span>direct-hit reduction by the FOP</span></div>
+<div><b id="ro"></b><span>frame readout, 2.21 Mpx x 14 clocks</span></div>
+</div>
+<p><small>Illustrative model: thickness stack = 2.5 mm fixed layers + FOP; FOP effect anchored to a published 2 mm / 100x data point; noise levels are illustrative. The faint round patch in the left tooth is a low-contrast caries lesion. Display is scaled down 5x from a 1300 x 1700 frame. By Sai Venkata Ajay Uppalapati for the DentX Hackathon.</small></p>
+<script>
+const W=260,H=340,N=W*H,$=id=>document.getElementById(id);
+function rng(s){return()=>{s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function gs(r){return Math.sqrt(-2*Math.log(r()+1e-12))*Math.cos(6.2832*r())}
+const T=new Float32Array(N),LES=[];const cl=(v,a,b)=>v<a?a:v>b?b:v;
+const teeth=[[86,66,160,296],[176,66,160,300]];
+for(let y=0;y<H;y++)for(let x=0;x<W;x++){let A=1.1;if(y>200+5*Math.sin(x/28))A+=1.0;
+ teeth.forEach(([cx,yt,yc,yr],k)=>{let hw=0;if(y>=yt&&y<yc)hw=35*Math.pow(Math.sin(.5*Math.PI*(y-yt)/(yc-yt)),.35);else if(y>=yc&&y<=yr)hw=7.6+24.4*Math.pow(1-(y-yc)/(yr-yc),1.2);
+ const dx=Math.abs(x-cx);if(dx<hw){const u=dx/hw,tf=Math.sqrt(1-u*u);let a=2*tf;if(y<yc)a+=1.1*tf*Math.pow(cl((u-.45)/.55,0,1),1.2);
+ const ph=(y<yc?12:2.8)*(1-.45*cl((y-yc)/(yr-yc),0,1));if(dx<ph&&y>yt+32&&y<yr-24)a-=1.6*tf;A+=a;}
+ if(k==1&&dx<14&&y>80&&y<104)A+=4.5;});
+ if(((x-110)/7)**2+((y-132)/10)**2<1){A-=.16;LES.push(y*W+x)}
+ T[y*W+x]=Math.exp(-A)}
+const fr=rng(5),off=new Float32Array(N),gn=new Float32Array(N),hot=new Uint8Array(N),co=[],cg=[];
+for(let x=0;x<W;x++){co.push(.67*gs(fr));cg.push(.005*gs(fr))}
+for(let i=0;i<N;i++){const x=i%W;off[i]=1.7*gs(fr)+co[x];gn[i]=1+.01*gs(fr)+cg[x];hot[i]=fr()<.001?1:0}
+const lset=new Set(LES);
+function med3(a){const o=new Float32Array(N),b=new Array(9);for(let y=0;y<H;y++)for(let x=0;x<W;x++){let k=0;for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++)b[k++]=a[cl(y+j,0,H-1)*W+cl(x+i,0,W-1)];b.sort((p,q)=>p-q);o[y*W+x]=b[4]}return o}
+function sim(n0,fop,cal,des){const r=rng(11),R=Math.exp(Math.log(100)/2*fop),a=new Float32Array(N);
+ for(let i=0;i<N;i++){const l=n0*T[i];let q=Math.max(0,l+Math.sqrt(l)*gs(r));const p=l*.015/R;let h=p<.5?(r()<p?1:0):Math.max(0,p+Math.sqrt(p)*gs(r));let hv=0;for(let k=0;k<Math.min(h,6);k++)hv+=-Math.log(r()+1e-9)*40;
+  a[i]=(q+hv/(gn[i]||1))*gn[i]+off[i]+(hot[i]?100:0)}
+ let m=null;if(cal){for(let i=0;i<N;i++)a[i]=(a[i]-off[i])/gn[i]-(hot[i]?100:0)*0;m=med3(a);for(let i=0;i<N;i++)if(hot[i])a[i]=m[i]}
+ if(des){m=med3(a);for(let i=0;i<N;i++)if(a[i]-m[i]>4*1.25*Math.sqrt(Math.max(m[i],1)))a[i]=m[i]}
+ return a}
+function cnr(a){let ls=0,rs=0,rn=0;const bx=[98,122,112,156];const hp=[];
+ for(let y=bx[2];y<bx[3];y++)for(let x=bx[0];x<bx[1];x++){const i=y*W+x;
+  let s=0;for(let j=-1;j<=1;j++)for(let k=-1;k<=1;k++)s+=a[(y+j)*W+x+k];hp.push(a[i]-s/9);
+  if(lset.has(i)){ls+=a[i]}else if((((x-110)/11)**2+((y-132)/16)**2)>1){rs+=a[i];rn++}}
+ const mr=rs/rn,ml=ls/LES.length;let v=0;hp.forEach(h=>v+=h*h);return Math.abs(ml-mr)/Math.sqrt(v/hp.length)}
+function draw(c,a,lo,hi){const g=$(c).getContext("2d"),d=g.createImageData(W,H);for(let i=0;i<N;i++){const v=255-255*cl((a[i]-lo)/(hi-lo),0,1);d.data[4*i]=d.data[4*i+1]=d.data[4*i+2]=v;d.data[4*i+3]=255}g.putImageData(d,0,0)}
+let busy=0;function run(){busy=0;const n0=+$("dose").value,f=+$("fop").value,m=+$("mclk").value,cal=$("cal").checked,des=$("des").checked;
+ $("vf").textContent=f.toFixed(1);$("vd").textContent=n0;$("vm").textContent=m;
+ const base=sim(n0,2,true,true),mine=sim(n0,f,cal,des),lo=0,hi=n0*.95;draw("c0",base,lo,hi);draw("c1",mine,lo,hi);
+ const c0=cnr(base),c1=cnr(mine);$("n0").textContent=c0.toFixed(2);$("n1").textContent=c1.toFixed(2);$("pc").textContent=Math.round(100*c1/c0)+"%";
+ const t=2.5+f;$("th").textContent=t.toFixed(1)+" mm";$("tb").style.width=(100*t/7.1)+"%";$("vs").textContent=Math.round(100*(1-t/7.1))+"%";
+ $("rd").textContent=Math.exp(Math.log(100)/2*f).toFixed(0)+"x";$("ro").textContent=(2.21e6*14/(m*1e6)).toFixed(2)+" s"}
+["fop","dose","mclk","cal","des"].forEach(i=>$(i).addEventListener("input",()=>{if(!busy){busy=1;requestAnimationFrame(run)}}));run();
+</script></body></html>
